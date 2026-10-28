@@ -10,6 +10,15 @@ app.use(bodyParser.json());
 
 const routerUsuario = require("./router/routerUsuario");
 const routerFuncionarios = require("./router/routerFuncionarios");
+const routerCategorias = require("./router/routerCategorias");
+const routerClientes = require("./router/routerClientes");
+const routerProdutos = require("./router/routerProdutos");
+const routerFornecedores = require("./router/routerFornecedores");
+const routerEntradas = require("./router/routerEntradas");
+const routerEstoque = require("./router/routerEstoque");
+const routerHistoricoPrecos = require("./router/routerHistoricoPrecos");
+const routerPedidos = require("./router/routerPedidos");
+const routerSaidas = require("./router/routerSaidas");
 
 //2. Controle de CORS (Headers & OPTIONS)
 app.use(cors({
@@ -24,6 +33,15 @@ app.use(cors({
 
 app.use("/usuario",routerUsuario);
 app.use("/funcionario",routerFuncionarios);
+app.use("/categorias", routerCategorias);
+app.use("/clientes", routerClientes);
+app.use("/produtos", routerProdutos);
+app.use("/fornecedores", routerFornecedores);
+app.use("/entradas", routerEntradas);
+app.use("/estoque", routerEstoque);
+app.use("/historico-precos", routerHistoricoPrecos);
+app.use("/pedidos", routerPedidos);
+app.use("/saidas", routerSaidas);
 
 
 
