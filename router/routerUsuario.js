@@ -1,12 +1,23 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const { randomBytes } = require("node:crypto");
+const { rateLimit } = require("express-rate-limit");
 const router = express.Router();
 const { pool, fail, invalid, parseId } = require("./_helpers");
+const { authenticate, issueToken, requireRole, tokenLifetimeSeconds } = require("../auth");
 
-const publicColumns = "id_usu, nome, email, contato, genero, ativo, criado_em, atualizado_em";
+const publicColumns = "id_usu, nome, email, contato, genero, role, ativo, criado_em, atualizado_em";
+const dummyPasswordHash = bcrypt.hashSync(randomBytes(32).toString("base64"), 12);
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { erro: "Muitas tentativas de login. Tente novamente mais tarde." }
+});
 
 function validateUser(body, partial = false) {
-    const fields = ["nome", "email", "senha", "contato", "genero", "ativo"];
+    const fields = ["nome", "email", "senha", "contato", "genero", "ativo", "role"];
     const provided = fields.filter((field) => Object.hasOwn(body, field));
     if (partial && provided.length === 0) {
         throw invalid("Informe ao menos um campo válido para atualizar.");
@@ -24,16 +35,20 @@ function validateUser(body, partial = false) {
         throw invalid("Informe um email válido.");
     }
     if (Object.hasOwn(body, "senha") &&
-        (typeof body.senha !== "string" || body.senha.length < 8)) {
-        throw invalid("A senha deve ter pelo menos 8 caracteres.");
+        (typeof body.senha !== "string" || Buffer.byteLength(body.senha, "utf8") < 12 ||
+            Buffer.byteLength(body.senha, "utf8") > 72)) {
+        throw invalid("A senha deve conter entre 12 e 72 bytes.");
     }
     if (Object.hasOwn(body, "ativo") && ![0, 1, false, true].includes(body.ativo)) {
         throw invalid("ativo deve ser 0 ou 1.");
     }
+    if (Object.hasOwn(body, "role") && !["admin", "operador"].includes(body.role)) {
+        throw invalid("role deve ser admin ou operador.");
+    }
     return provided;
 }
 
-router.post("/login", (req, res) => {
+router.post("/login", loginLimiter, (req, res) => {
     const body = req.body || {};
     if (typeof body.email !== "string" ||
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim()) ||
@@ -50,33 +65,24 @@ router.post("/login", (req, res) => {
 
             try {
                 const usuario = rows[0];
-                if (!usuario || Number(usuario.ativo) !== 1) {
+                const hashValido = Boolean(usuario) && typeof usuario.senha_hash === "string" &&
+                    /^\$2[aby]\$\d{2}\$/.test(usuario.senha_hash);
+                const hashParaComparar = hashValido
+                    ? usuario.senha_hash.replace(/^\$2y\$/, "$2b$")
+                    : dummyPasswordHash;
+                const senhaValida = await bcrypt.compare(body.senha, hashParaComparar);
+                if (!usuario || Number(usuario.ativo) !== 1 || !hashValido || !senhaValida) {
                     return res.status(401).json({ erro: "Email ou senha inválidos." });
-                }
-
-                const senhaLegada = !usuario.senha_hash.startsWith("$2");
-                const senhaValida = senhaLegada
-                    ? usuario.senha_hash === body.senha
-                    : await bcrypt.compare(body.senha, usuario.senha_hash);
-                if (!senhaValida) {
-                    return res.status(401).json({ erro: "Email ou senha inválidos." });
-                }
-
-                if (senhaLegada) {
-                    const senhaHash = await bcrypt.hash(body.senha, 12);
-                    await new Promise((resolve, reject) => {
-                        pool.query(
-                            "UPDATE usuarios SET senha_hash = ? WHERE id_usu = ?",
-                            [senhaHash, usuario.id_usu],
-                            (updateError) => updateError ? reject(updateError) : resolve()
-                        );
-                    });
                 }
 
                 delete usuario.senha_hash;
+                res.set("Cache-Control", "no-store");
                 return res.status(200).json({
                     mensagem: "Login realizado com sucesso.",
-                    usuario
+                    usuario,
+                    access_token: issueToken(usuario),
+                    token_type: "Bearer",
+                    expires_in: tokenLifetimeSeconds
                 });
             } catch (loginError) {
                 return fail(res, loginError);
@@ -84,6 +90,8 @@ router.post("/login", (req, res) => {
         }
     );
 });
+
+router.use(authenticate, requireRole("admin"));
 
 router.get("/", (req, res) => {
     pool.query(`SELECT ${publicColumns} FROM usuarios`, (error, rows) => {
@@ -116,15 +124,16 @@ router.post("/", async (req, res) => {
         validateUser(body);
         const senhaHash = await bcrypt.hash(body.senha, 12);
         pool.query(
-            `INSERT INTO usuarios (nome, email, senha_hash, contato, genero, ativo)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO usuarios (nome, email, senha_hash, contato, genero, ativo, role)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
                 body.nome.trim(),
                 body.email.trim(),
                 senhaHash,
                 body.contato ?? null,
                 body.genero ?? null,
-                body.ativo ?? 1
+                body.ativo ?? 1,
+                body.role ?? "operador"
             ],
             (error, result) => {
                 if (error) return fail(res, error);
@@ -146,6 +155,14 @@ router.patch("/:id", async (req, res) => {
     try {
         id = parseId(req.params.id);
         fields = validateUser(body, true);
+        if (id === Number(req.auth.id)) {
+            if (body.role && body.role !== req.auth.role) {
+                throw invalid("Não é permitido alterar o próprio perfil de acesso.");
+            }
+            if (body.ativo === 0 || body.ativo === false) {
+                throw invalid("Não é permitido desativar a própria conta.");
+            }
+        }
     } catch (error) {
         return fail(res, error);
     }
@@ -192,6 +209,9 @@ router.delete("/:id", (req, res) => {
     let id;
     try {
         id = parseId(req.params.id);
+        if (id === Number(req.auth.id)) {
+            throw invalid("Não é permitido desativar a própria conta.");
+        }
     } catch (error) {
         return fail(res, error);
     }
