@@ -146,6 +146,23 @@ Consulte “Executar o frontend PHP” para iniciá-lo localmente. O login usa a
 e guarda o token somente na sessão do servidor PHP; a página `dashboard.php`
 exige sessão válida.
 
+## Executar o frontend PHP localmente
+
+Use PHP 8.1 ou superior. Com a API em execução e `API_BASE_URL` não definida, o
+frontend usa `http://127.0.0.1:5000`. Em um segundo terminal PowerShell, inicie o
+servidor do frontend:
+
+```powershell
+$env:API_BASE_URL = "http://127.0.0.1:5000"
+& "C:\xampp\php\php.exe" -S 127.0.0.1:8000 -t "C:\www\frontend-php"
+```
+
+Se PHP estiver instalado em outro local, substitua o caminho para `php.exe`.
+Abra `http://127.0.0.1:8000` no navegador e entre com uma conta existente no
+banco. Para hospedar o frontend separadamente em produção, configure
+`API_BASE_URL` no ambiente do PHP com a URL HTTPS correta da API; não use o
+endereço local como URL de produção.
+
 ## Rotas
 
 Os caminhos abaixo são relativos à URL base da API. `:id`, `:idProduto` e
@@ -380,13 +397,40 @@ Nesse caso, abra `http://127.0.0.1:8080/`.
 ### Publicar o frontend PHP
 
 O serviço do Render configurado neste repositório executa somente a API Node;
-ele não executa PHP. Publique o conteúdo de `frontend-php` em uma hospedagem
-com PHP (por exemplo, uma hospedagem PHP compartilhada) e configure essa pasta
-como raiz pública do site. Configure `API_BASE_URL` no painel da hospedagem PHP
-com a URL HTTPS da API no Render, sem barra final, por exemplo
-`https://api-simples.onrender.com`. Não coloque essa variável no JavaScript nem
-em um arquivo público. No painel da hospedagem, habilite HTTPS e mantenha
-`allow_url_fopen` habilitado para as chamadas PHP à API.
+ele não executa PHP. O frontend foi desenvolvido em PHP e deve ser servido como
+site PHP, não como site de arquivos estáticos. No AlwaysData:
+
+1. No painel, abra **Web > Sites > Add a site**, escolha o tipo **PHP** e
+   associe o endereço público desejado. Configure a raiz do site para a pasta
+   onde os arquivos do pacote serão colocados.
+2. Em **Environment > PHP** (ou na configuração PHP do site), selecione PHP 8.1
+   ou superior e deixe `allow_url_fopen = On`. JSON, OpenSSL e mbstring são
+   necessários; estão habilitados por padrão nas versões PHP documentadas pelo
+   AlwaysData.
+3. Baixe `frontend-alwaysdata.zip` dos artefatos desta entrega, extraia o
+   conteúdo diretamente para a raiz pública configurada no site (o `index.php`
+   e o `.htaccess` devem ficar nessa raiz). Alternativamente, envie os arquivos
+   de `frontend-php` por SFTP para a mesma pasta. Os dados SFTP estão em
+   **Remote access > SSH/SFTP** no painel AlwaysData; nunca os compartilhe.
+4. O `.htaccess` incluído define `API_BASE_URL` como
+   `https://api-simples.onrender.com`. Se a API mudar, atualize essa linha no
+   `.htaccess` do site. Não coloque credenciais no frontend.
+5. Ative SSL para o endereço do site e marque **Force HTTPS** em
+   **Web > Sites > Modify the site > SSL**.
+6. Abra o domínio HTTPS do site. Teste login com uma conta ativa e, após
+   autenticar, teste as operações autorizadas ao perfil.
+
+O painel PHP faz chamadas à API do lado do servidor; não requer CORS para o
+domínio AlwaysData. `allow_url_fopen` é necessário para essas chamadas. O
+pacote pode ser preparado com:
+
+```powershell
+Compress-Archive -Path frontend-php\* -DestinationPath frontend-alwaysdata.zip -Force
+```
+
+Também é possível configurar `API_BASE_URL` como variável de ambiente do PHP;
+o frontend consulta essa variável antes de usar o valor definido no `.htaccess`
+ou a URL padrão.
 
 Antes de liberar o site, confirme que:
 
